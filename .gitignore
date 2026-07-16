@@ -1,0 +1,12 @@
+# 大容量バイナリ（VOICEVOX Core依存）はGit管理外。11kai/またはREQUIREMENTS.mdの手順で別途配置する
+/dict/
+/onnxruntime/
+/models/vvms/*.vvm
+
+# YOLOモデル重み
+/models/*.pt
+
+# 生成物
+*.wav
+__pycache__/
+*.pyc
