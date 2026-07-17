@@ -1,29 +1,17 @@
 r"""
 画像・音声認識 第11回 - VOICEVOX音声合成 (Windows / CUDA版)
-スライド p.1 ~ p.10 に対応するコード
+実行環境: nidone (Python 3.10, CUDA 12.8)。dict/, models/, onnxruntime/ がプロジェクトルートにあること。
 
-【実行環境】
-    仮想環境  : GPTSoVits (Python 3.10, CUDA 12.8)
-    実行方法  : C:\Users\nk2400\anaconda3\envs\GPTSoVits\python.exe 1_10.py
-    作業フォルダ: 11kai/ (dict/, models/, onnxruntime/ が同フォルダにあること)
-
-【事前準備】（voicevox_setup_windows.md 参照）
-    1. download-windows-x64.exe を 11kai/ に置いて CUDA版モデルをダウンロード
-       > .\download-windows-x64.exe -o . --exclude c-api --devices cuda
-    2. CUDA版 wheel をインストール
-       > C:\...\GPTSoVits\python.exe -m pip install
-           https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/
-           voicevox_core-0.16.4+cuda-cp310-abi3-win_amd64.whl
-
-【使用モデル】
-    ずんだもん（ノーマル）スタイルID: 5 (0.vvm)
+使用モデル: ずんだもん（ノーマル）スタイルID: 5 (0.vvm)
 """
 
+import io
 import os
-import sys
+import wave
+
+import config
 
 # ---- Windows: onnxruntime の DLL を明示的に登録 ----
-# ImportError: DLL load failed が出る場合の対策
 _onnx_dll_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "onnxruntime", "lib")
 if os.path.isdir(_onnx_dll_dir):
     os.add_dll_directory(_onnx_dll_dir)
@@ -35,72 +23,61 @@ from voicevox_core.blocking import (
     VoiceModelFile,
 )
 
-# --------
-# パス設定（プロジェクトルート直下に dict/, models/, onnxruntime/ がある想定。
-# 本ファイルは modules/ 配下にあるため、1階層上をルートとする）
-# --------
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-voicevox_onnxruntime_path = os.path.join(
-    BASE_DIR, "onnxruntime", "lib", Onnxruntime.LIB_VERSIONED_FILENAME
-)
-open_jtalk_dict_dir = os.path.join(BASE_DIR, "dict", "open_jtalk_dic_utf_8-1.11")
+_synthesizer = None
 
-# --------
-# 初期化 (CUDA を優先、使えない場合は自動でCPUにフォールバック)
-# --------
-print("VOICEVOX Core を初期化中...")
-synthesizer = Synthesizer(
-    Onnxruntime.load_once(filename=voicevox_onnxruntime_path),
-    OpenJtalk(open_jtalk_dict_dir),
-    acceleration_mode="AUTO",  # AUTO: GPU/CPU を自動選択
-)
-print("  初期化完了。")
 
-# --------
-# モデルの読み込み
-# ずんだもん（ノーマル）（スタイルID: 5）→ 0.vvm を使用
-# --------
-style_id = 5
-vvm_path = os.path.join(BASE_DIR, "models", "vvms", "0.vvm")
+def _get_synthesizer() -> Synthesizer:
+    global _synthesizer
+    if _synthesizer is not None:
+        return _synthesizer
 
-print(f"モデルを読み込み中: {vvm_path}")
-with VoiceModelFile.open(vvm_path) as model:
-    synthesizer.load_voice_model(model)
-print("  モデル読み込み完了。")
+    onnxruntime_path = os.path.join(BASE_DIR, "onnxruntime", "lib", Onnxruntime.LIB_VERSIONED_FILENAME)
+    open_jtalk_dict_dir = os.path.join(BASE_DIR, "dict", "open_jtalk_dic_utf_8-1.11")
 
-# ========================================
-# 1. テキスト読み上げ（ひらがな/漢字入力）
-# ========================================
-print("\n--- 1. テキスト読み上げ (tts) ---")
-text = "きょうふのみそしる。ここではきものをおぬぎください。"
-print(f"  入力テキスト: {text}")
+    synthesizer = Synthesizer(
+        Onnxruntime.load_once(filename=onnxruntime_path),
+        OpenJtalk(open_jtalk_dict_dir),
+        acceleration_mode="AUTO",
+    )
+    vvm_path = os.path.join(BASE_DIR, "models", "vvms", "0.vvm")
+    with VoiceModelFile.open(vvm_path) as model:
+        synthesizer.load_voice_model(model)
 
-wav = synthesizer.tts(text, style_id)
+    _synthesizer = synthesizer
+    return _synthesizer
 
-output_path = os.path.join(BASE_DIR, "output.wav")
-with open(output_path, "wb") as f:
-    f.write(wav)
-print(f"  → {output_path} に保存しました。")
 
-# ============================================================
-# 2. アクセント記号付きカナ入力による読み上げ（tts_from_kana）
-# ============================================================
-print("\n--- 2. アクセント付きカナ読み上げ (tts_from_kana) ---")
-# アクセント記法:
-#   - 全てのカナはカタカナで記述
-#   - アクセント句は / または 、 で区切る（ 、 は無音区間が挿入される）
-#   - カナの手前に _ を入れるとそのカナは無声化される
-#   - アクセント位置を ' で指定（各アクセント句に1つ必須）
-#   - アクセント句末に ？（全角）を入れると疑問文の発音になる
-text_kana = "キョ'ウ/フノミソシ'ル、ココ'デ/ハキモノオ'/オヌギクダ'サイ"
-print(f"  入力カナ: {text_kana}")
+def synthesize(text: str, style_id: int = None) -> bytes:
+    """テキストをWAVバイト列に変換する。"""
+    style_id = config.VOICEVOX_STYLE_ID if style_id is None else style_id
+    return _get_synthesizer().tts(text, style_id)
 
-wav2 = synthesizer.tts_from_kana(text_kana, style_id)
 
-output_path2 = os.path.join(BASE_DIR, "output_2.wav")
-with open(output_path2, "wb") as f:
-    f.write(wav2)
-print(f"  → {output_path2} に保存しました。")
+def speak(text: str, style_id: int = None):
+    """テキストを読み上げ、スピーカーから再生する（再生完了までブロック）。"""
+    import sounddevice as sd
 
-print("\n完了！output.wav と output_2.wav を再生してください。")
+    wav_bytes = synthesize(text, style_id)
+    with wave.open(io.BytesIO(wav_bytes)) as wf:
+        import numpy as np
+
+        n_frames = wf.getnframes()
+        raw = wf.readframes(n_frames)
+        dtype = {1: np.int8, 2: np.int16, 4: np.int32}[wf.getsampwidth()]
+        samples = np.frombuffer(raw, dtype=dtype).reshape(-1, wf.getnchannels())
+        sample_rate = wf.getframerate()
+
+    sd.play(samples, sample_rate)
+    sd.wait()
+
+
+if __name__ == "__main__":
+    text = "きょうふのみそしる。ここではきものをおぬぎください。"
+    wav = synthesize(text)
+    output_path = os.path.join(BASE_DIR, "output.wav")
+    with open(output_path, "wb") as f:
+        f.write(wav)
+    print(f"{output_path} に保存しました。再生します...")
+    speak(text)
