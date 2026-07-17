@@ -6,7 +6,13 @@
 # YOLOモデル重み
 /models/*.pt
 
-# 生成物
-*.wav
+# 生成物（voice.py動作確認用の出力。assets/sounds/内のアラーム音アセットは対象外）
+/output.wav
+/output_2.wav
 __pycache__/
 *.pyc
+*.log
+/assets/snapshots/
+
+# APIキー等の秘匿情報
+.env
