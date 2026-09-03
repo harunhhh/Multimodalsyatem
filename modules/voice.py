@@ -1,6 +1,14 @@
 r"""
-画像・音声認識 第11回 - VOICEVOX音声合成 (Windows / CUDA版)
-実行環境: nidone (Python 3.10, CUDA 12.8)。dict/, models/, onnxruntime/ がプロジェクトルートにあること。
+F2: VOICEVOX Coreによる音声合成 (Windows / CUDA版)
+
+実行環境: 専用の仮想環境 (Python 3.10, CUDA 12.8)。
+
+以下がプロジェクト直下に配置されていること（いずれもGit管理外。入手方法はREADME.md参照）:
+  dict/open_jtalk_dic_utf_8-1.11/  日本語の読み方辞書
+  onnxruntime/                     推論エンジン
+  models/vvms/0.vvm                音声モデル
+
+このファイル単体で実行すると output.wav / output_2.wav を生成し、動作確認ができる。
 
 使用モデル: ずんだもん（ノーマル）スタイルID: 5 (0.vvm)
 """

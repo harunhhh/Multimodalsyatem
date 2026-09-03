@@ -1,4 +1,4 @@
-"""assets/snapshots/ の画像でROI選択(set_roi)をテストする。
+"""assets/snapshots/ の画像でROI選択(select_roi_live)をテストする。
 
 使い方:
     python test_roi.py            # 一覧表示 + 最新の1枚で実行
@@ -47,7 +47,17 @@ def main():
         print("画像を読み込めませんでした。")
         return
 
-    roi = futon_monitor.set_roi(frame)
+    # select_roi_live はcapオブジェクト（.read()を持つもの）を受け取るため、
+    # 静止画を毎回返すだけのアダプタでラップする
+    class _StillFrame:
+        def read(self):
+            return True, frame
+
+    try:
+        roi = futon_monitor.select_roi_live(_StillFrame())
+    except KeyboardInterrupt:
+        print("中止しました。")
+        return
     print(f"ROI選択結果: {roi}")
 
 

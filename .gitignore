@@ -16,3 +16,4 @@ __pycache__/
 
 # APIキー等の秘匿情報
 .env
+posture_samples.log

@@ -19,25 +19,13 @@ def main():
         print("カメラを開けませんでした")
         return
 
-    print("'s'キー: ROI選択用のフレームを撮影 / 'q'キー: 終了")
-    roi_frame = None
-    while roi_frame is None:
-        ok, frame = cap.read()
-        if not ok:
-            print("フレーム取得に失敗しました")
-            cap.release()
-            return
-        cv2.imshow("撮影プレビュー (s:撮影, q:終了)", frame)
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord("s"):
-            roi_frame = frame
-        elif key == ord("q"):
-            cap.release()
-            cv2.destroyAllWindows()
-            return
-    cv2.destroyWindow("撮影プレビュー (s:撮影, q:終了)")
-
-    roi = futon_monitor.set_roi(roi_frame)
+    print("ライブ映像上でROIをドラッグ選択 → Enterで確定 / 'r':やり直し / 'q':終了")
+    try:
+        roi = futon_monitor.select_roi_live(cap)
+    except KeyboardInterrupt:
+        cap.release()
+        cv2.destroyAllWindows()
+        return
     print(f"ROI: {roi}")
 
     baseline = None
@@ -55,7 +43,7 @@ def main():
         cv2.rectangle(display, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
         if baseline is None:
-            cv2.putText(display, "'s'で基準フレームを記録", (10, 30),
+            cv2.putText(display, "press 's' to take baseline", (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
         else:
             ratio = futon_monitor.check_change(frame, roi, baseline)

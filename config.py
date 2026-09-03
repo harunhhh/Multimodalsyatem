@@ -9,7 +9,8 @@ POSTURE_CHECK_INTERVAL_SEC = 0.15   # 判定間隔
 POSTURE_HOLD_REQUIRED_SEC = 3.0     # 累積保持でWOKENとなる秒数
 POSTURE_KEYPOINT_CONF_THRESHOLD = 0.5   # 肩・腰・手首・鼻のconfidence閾値（要実測調整）
 POSTURE_WRIST_ABOVE_NOSE_MARGIN_PX = 20  # 手首y座標が鼻y座標よりどれだけ小さければ「高い」とみなすか（要実測調整）
-POSTURE_VERTICAL_ALIGN_MAX_RATIO = 0.5  # 肩中心と腰中心のx方向ずれ許容量（肩幅に対する比率、要実測調整）
+POSTURE_VERTICAL_ALIGN_MAX_RATIO = 0.5  # 【現在未使用】腰基準の旧判定用。布団の上で上体を起こすと誤判定したため廃止
+POSTURE_SHOULDER_TILT_MAX_RATIO = 0.5   # 直立判定。肩のy差/肩幅の許容量（実測: 起床0.01〜0.06 / 就寝0.59〜17.47）
 
 # --- F2: LLM対話 ---
 GEMINI_API_TIMEOUT_SEC = 10
