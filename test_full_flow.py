@@ -13,14 +13,19 @@ import main as m
 
 def main():
     system = m.NidoneBoushiSystem()
+
+    # _setup_futon_roi()はライブ映像上でROIを選ぶため、先にカメラを開いておく必要がある
+    system.cap = cv2.VideoCapture(config.CAMERA_INDEX)
+    if not system.cap.isOpened():
+        print("カメラを開けませんでした")
+        return
+    system.camera_last_ok_time = time.monotonic()
     system._setup_futon_roi()
 
     # STANDBY→ALARM_RINGING遷移時と同じ初期化を、時刻チェック無しで行う
-    system.cap = cv2.VideoCapture(config.CAMERA_INDEX)
     system.last_alarm_volume_up = time.monotonic()
     system.futon_baseline = None
     system.futon_change_start = None
-    system.camera_last_ok_time = time.monotonic()
     system.camera_error_notified = False
     system.alarm_sound_path = config.ALARM_NORMAL_SOUND_PATH
     system.alarm_volume = config.ALARM_BASE_VOLUME

@@ -3,7 +3,7 @@
 import logging
 import time
 import winsound
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum, auto
 
 import cv2
@@ -44,10 +44,19 @@ class NidoneBoushiSystem:
         self.alarm_sound_path = config.ALARM_NORMAL_SOUND_PATH
         self.alarm_volume = config.ALARM_BASE_VOLUME
         self.is_relapse_wake = False
+        self.alarm_hour = config.ALARM_HOUR
+        self.alarm_minute = config.ALARM_MINUTE
+        self.last_fired_minute = None  # 同じ分内での多重発火を防ぐ
+        self.last_posture_log = 0.0
 
     def run(self):
-        self._setup_futon_roi()
+        self.alarm_hour, self.alarm_minute = self._prompt_alarm_time()
+        self.cap = cv2.VideoCapture(config.CAMERA_INDEX)
+        if not self.cap.isOpened():
+            raise RuntimeError("カメラを開けませんでした（CAMERA_INDEX=%d）" % config.CAMERA_INDEX)
+        self.camera_last_ok_time = time.monotonic()
         try:
+            self._setup_futon_roi()
             while True:
                 if self.state == State.STANDBY:
                     self._run_standby()
@@ -70,37 +79,64 @@ class NidoneBoushiSystem:
         logging.info("状態遷移: %s -> %s", self.state.name, new_state.name)
         self.state = new_state
 
+    def _prompt_alarm_time(self):
+        """起動時にアラーム時刻を入力させる。空入力ならconfigの既定値を使う。"""
+        default = "%02d:%02d" % (config.ALARM_HOUR, config.ALARM_MINUTE)
+        while True:
+            raw = input("アラーム時刻を入力 (HH:MM) [既定 %s]: " % default).strip()
+            if not raw:
+                return config.ALARM_HOUR, config.ALARM_MINUTE
+            try:
+                parsed = datetime.strptime(raw, "%H:%M")
+            except ValueError:
+                print("形式が正しくありません。例: 07:00")
+                continue
+            return parsed.hour, parsed.minute
+
     def _setup_futon_roi(self):
-        temp_cap = cv2.VideoCapture(config.CAMERA_INDEX)
-        window_name = "撮影プレビュー (s:撮影)"
-        roi_frame = None
-        while roi_frame is None:
-            ok, frame = temp_cap.read()
-            if not ok:
-                temp_cap.release()
-                raise RuntimeError("ROI設定用のフレーム取得に失敗しました")
-            cv2.imshow(window_name, frame)
-            if cv2.waitKey(1) & 0xFF == ord("s"):
-                roi_frame = frame
-        temp_cap.release()
-        cv2.destroyAllWindows()
-        self.futon_roi = futon_monitor.set_roi(roi_frame)
+        """ライブ映像上で布団のROIをドラッグ選択する（静止画の撮影ステップは無し）。"""
+        self.futon_roi = futon_monitor.select_roi_live(self.cap)
+        logging.info("布団ROIを設定しました: %s", self.futon_roi)
+
+    def _seconds_until_alarm(self, now: datetime) -> int:
+        """次にアラームが鳴るまでの秒数。"""
+        target = now.replace(hour=self.alarm_hour, minute=self.alarm_minute, second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        return int((target - now).total_seconds())
 
     def _run_standby(self):
         now = datetime.now()
-        if now.hour == config.ALARM_HOUR and now.minute == config.ALARM_MINUTE:
-            self.cap = cv2.VideoCapture(config.CAMERA_INDEX)
+        current_minute = (now.date(), now.hour, now.minute)
+        is_alarm_time = now.hour == self.alarm_hour and now.minute == self.alarm_minute
+
+        frame = self._read_camera_frame()
+        if frame is not None:
+            remaining = self._seconds_until_alarm(now)
+            ui.draw_frame(frame, self.state.name, 0.0, [
+                ("alarm at %02d:%02d" % (self.alarm_hour, self.alarm_minute), None),
+                ("starts in %dh %02dm %02ds" % (remaining // 3600, remaining % 3600 // 60, remaining % 60), None),
+            ])
+
+        if self._check_stop_button():
+            logging.info("待機中にSTOPが押されたため終了します。")
+            raise KeyboardInterrupt
+
+        if is_alarm_time and self.last_fired_minute != current_minute:
+            self.last_fired_minute = current_minute
             self.last_alarm_volume_up = time.monotonic()
+            self.posture_hold_total = 0.0
+            self.posture_hold_start = None
             self.futon_baseline = None
             self.futon_change_start = None
-            self.camera_last_ok_time = time.monotonic()
             self.camera_error_notified = False
             self.alarm_sound_path = config.ALARM_NORMAL_SOUND_PATH
             self.alarm_volume = config.ALARM_BASE_VOLUME
             self.is_relapse_wake = False
             self._transition(State.ALARM_RINGING)
-        else:
-            time.sleep(1.0)
+            return
+
+        time.sleep(0.2)
 
     def _run_alarm_ringing(self):
         alarm.play_loop(self.alarm_sound_path, self.alarm_volume)
@@ -116,19 +152,44 @@ class NidoneBoushiSystem:
             time.sleep(config.POSTURE_CHECK_INTERVAL_SEC)
             return
 
-        ui.draw_frame(frame, self.state.name, self.posture_hold_total)
+        now = time.monotonic()
+        posture_ok, info = posture.check_posture_debug(frame)
+
+        # どの条件で落ちているかを画面とログで確認できるようにする（閾値調整用）
+        if info:
+            lines = [
+                ("wrist above nose: %s" % info["wrist_above_nose"], info["wrist_above_nose"]),
+                ("upright by %s (ratio=%.2f): %s"
+                 % (info["upright_basis"], info["offset_ratio"], info["is_upright"]),
+                 info["is_upright"]),
+                ("conf ok (nose/shoulders, need=%.2f): %s"
+                 % (config.POSTURE_KEYPOINT_CONF_THRESHOLD, info["conf_ok"]),
+                 info["conf_ok"]),
+            ]
+        else:
+            lines = [("person not detected", False)]
+        ui.draw_frame(frame, self.state.name, self.posture_hold_total, lines)
+
+        if now - self.last_posture_log >= 1.0:
+            self.last_posture_log = now
+            if info:
+                logging.info(
+                    "姿勢判定 ok=%s wrist_above_nose=%s is_upright=%s(%s ratio=%.2f) conf_ok=%s hold=%.1fs",
+                    posture_ok, info["wrist_above_nose"], info["is_upright"],
+                    info["upright_basis"], info["offset_ratio"], info["conf_ok"], self.posture_hold_total,
+                )
+            else:
+                logging.info("姿勢判定: 人物が検出されていません hold=%.1fs", self.posture_hold_total)
+
         if self._check_stop_button():
             alarm.stop()
             self._transition(State.STANDBY)
             return
 
-        now = time.monotonic()
         if now - self.last_alarm_volume_up >= config.ALARM_VOLUME_UP_INTERVAL_SEC:
             self.alarm_volume = min(self.alarm_volume + config.ALARM_VOLUME_STEP, config.ALARM_MAX_VOLUME)
             alarm.play_loop(self.alarm_sound_path, self.alarm_volume)
             self.last_alarm_volume_up = now
-
-        posture_ok = posture.check_posture(frame)
         if posture_ok:
             if self.posture_hold_start is None:
                 self.posture_hold_start = now
@@ -163,7 +224,11 @@ class NidoneBoushiSystem:
         hold_time = 0.0 if self.monitoring_start is None else time.monotonic() - self.monitoring_start
 
         if self.futon_baseline is None:
-            ui.draw_frame(frame, self.state.name, hold_time, [("waiting: 布団基準フレーム記録待ち", None)])
+            # cv2.putTextは日本語を描画できないため英字で表示する
+            ui.draw_frame(frame, self.state.name, hold_time, [
+                ("WAITING: leave the camera view", False),
+                ("baseline is taken once nobody is detected", None),
+            ])
             if self._check_stop_button():
                 self._transition(State.STANDBY)
                 return

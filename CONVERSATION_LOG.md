@@ -1,12 +1,28 @@
-# 開発ログ（Claudeとの会話記録）
+# 開発ログ
 
-このファイルは、本プロジェクトの企画〜要件定義〜初期セットアップまでの経緯をまとめた会話ログ。
+このファイルは、本プロジェクトの企画〜要件定義〜実機調整までの経緯をまとめた会話ログ。
+**当時の記録なので、記述が現在の実装と異なる場合がある。**現在の仕様は [REQUIREMENTS.md](REQUIREMENTS.md)、
+セットアップ手順は [README.md](README.md) を参照。
+
+### 必要なデータの入手先
+
+`dict/`（辞書）、`onnxruntime/`（推論エンジン）、`models/vvms/0.vvm`（音声モデル）は
+リポジトリに含まれていない。以下から取得する。
+
+- [VOICEVOX Core 0.16.4 リリースページ](https://github.com/VOICEVOX/voicevox_core/releases/tag/0.16.4)
+  のダウンローダー `download-windows-x64.exe`
+
+### 仮想環境について
+
+このプロジェクトは専用の仮想環境（Python 3.10）で動かす。環境名は任意。
+既存の環境を流用すると、CUDA版PyTorchの導入でそちらを壊すため、必ず新規に作ること
+（下記「トラブルと対応」はその事故の記録）。
 
 ---
 
 ## 1. 企画の相談
 
-課題ドキュメント「画像音声課題08_IA13L_田中晴.docx」の内容（マルチモーダル対話システムを利用した二度寝防止システム）について、技術的に実現可能か相談。
+マルチモーダル対話システムを利用した二度寝防止システムについて、技術的に実現可能か相談。
 
 **結論**:
 - ①姿勢認識による起床判定（YOLO pose + OpenCV）→ 実現可能
@@ -19,35 +35,55 @@
 
 - **スコープ**: ①姿勢認識起床判定 ②LLM対話 ③二度寝監視 の3機能。スマホ連携・複数ユーザー対応は対象外
 - **F1（姿勢認識）**: `yolov8n-pose.pt`使用。手首が頭より高い＋肩腰が垂直＋上半身がフレーム内、をAND条件とし、キーポイント信頼度閾値も課す。累積3秒保持で起床成立。判定間隔は約0.15秒
-- **F2（LLM対話）**: Gemini APIで挨拶文生成 → VOICEVOX（ずんだもん、style_id=5）で読み上げ。11kai/voicevox.py の構成を流用
+- **F2（LLM対話）**: Gemini APIで挨拶文生成 → VOICEVOX（ずんだもん、style_id=5）で読み上げ
 - **F3（二度寝監視）**: 起動時に手動でROI指定。起床成立後、人物がフレームから消えたタイミングでベッド状態を基準フレームとして記録。背景差分の変化ピクセル割合（暫定15〜20%）が10秒継続したら二度寝と判定。監視間隔は1秒
 - **F4（異常系）**: カメラ切断→警告音、Gemini APIタイムアウト→定型文フォールバック、手動停止→画面上のボタンクリック
 - **状態遷移**: STANDBY → ALARM_RINGING（30秒ごと音量UP） → POSTURE_HOLDING → WOKEN → GREETING → MONITORING → （二度寝時は専用音でRELAPSE_ALARM→ALARM_RINGINGへ、累積タイマーは0リセット）
-- **環境**: GPTSoVits共有環境ではなく、新規に `nidone` という専用conda環境（Python 3.10）を作成して一本化
+- **環境**: 既存の共有環境を流用せず、専用の仮想環境（Python 3.10）を新規作成して一本化
 
 ## 3. 環境構築
 
-1. `11kai/`（授業フォルダ）から `dict/`, `models/vvms/0.vvm`, `onnxruntime/` をコピーし、プロジェクト単体で完結する構成にした
-2. `11kai/voicevox.py` を `modules/voice.py` としてコピー
-3. `nidone` conda環境を新規作成し、`ultralytics`, `opencv-python`, `sounddevice`, `google-generativeai`, CUDA版`torch`/`torchvision`（cu128）, `voicevox_core` をインストール
+1. `dict/`, `models/vvms/0.vvm`, `onnxruntime/` をプロジェクト直下に配置し、単体で完結する構成にした
+2. VOICEVOXのサンプルコードをベースに `modules/voice.py` を作成
+3. 専用の仮想環境を新規作成し、`ultralytics`, `opencv-python`, `sounddevice`, `google-generativeai`, CUDA版`torch`/`torchvision`（cu128）, `voicevox_core` をインストール
 
 **トラブルと対応**:
-- 最初 `GPTSoVits` 環境に直接パッケージを入れてしまい、共有環境のtorchがCUDA版→CPU版に書き換わる事故が発生 → `nidone` 環境を新規に切り直す方針に変更し、`GPTSoVits` 環境は `torch==2.11.0+cu128` に復元して事なきを得た
+- 最初、別プロジェクトで使っていた既存の共有環境に直接パッケージを入れてしまい、その環境のtorchがCUDA版→CPU版に書き換わる事故が発生 → 専用環境を新規に切り直す方針に変更し、元の環境は `torch==2.11.0+cu128` に復元して事なきを得た
 - `voice.py` のパス指定バグ（`modules/`配下なのにルート直下前提だった）を修正
 - `voicevox_core` のAPI変更（`AccelerationMode.AUTO`→文字列`"AUTO"`、importパスの変更、`.meta`属性の廃止）に追従
-- 上記修正後、`nidone`環境で`voice.py`実行→`output.wav`/`output_2.wav`生成を確認し、動作確認完了
+- 上記修正後、`voice.py`実行→`output.wav`/`output_2.wav`生成を確認し、動作確認完了
 
 ## 4. Git管理
 
-- リポジトリ: https://github.com/harunhhh/Multimodalsyatem
 - 大容量バイナリ（`dict/`約100MB, `onnxruntime/`約325MB, `models/vvms/0.vvm`約55MB）はGitHubのファイルサイズ上限やプロジェクト規約（CLAUDE.md「大容量ファイルはGit管理外」）に従い `.gitignore` で除外
 - 複数PCでの開発再現のため `requirements.txt`（`pip freeze`、CUDA版torch/torchvisionは除く）とセットアップ手順を記載した `README.md` を追加してプッシュ
 - CUDA版torchはPyPIに存在しないため、README内で `--index-url https://download.pytorch.org/whl/cu128` を使った個別インストール手順を案内
-- プロジェクトフォルダを `anaconsan/gazou/nidone_boushi_system/` から `anaconsan/Multimodalsyatem/`（gitリポジトリ直下）に統合・移動
+- プロジェクトフォルダをリポジトリ直下に統合・移動
 
-## 5. 次にやること（未着手）
+## 5. F1〜F4の実装（完了）
 
-- F1（YOLO pose姿勢判定）の実装
-- F1/F3の閾値の実測・調整（手首/鼻のy座標差、キーポイント信頼度、背景差分の変化割合）
-- Gemini APIキーの取得
-- F2（LLM対話）・F3（二度寝監視）・GUI（停止ボタン等）の実装
+F1（姿勢判定）・F2（LLM対話）・F3（二度寝監視）・F4（異常系）とGUIを実装し、PR #1 でマージした。
+
+## 6. 実機での調整（2026-09-03）
+
+通しで動かしたところ複数の問題が出たため、実測値を取りながら修正した。
+
+**起動操作の簡略化**
+- 「`s`キーで撮影 → ROI選択 → `y`で確認」の3段階を、ライブ映像上でのドラッグ+Enterの1段階にした
+- アラーム時刻を起動時に入力できるようにした（従来はconfig.pyの直接編集）
+- STANDBY中に`time.sleep()`を回すだけでウィンドウのイベントループが止まり、Windowsから「応答なし」と判定されていたため、待機画面を描画し続けるようにした
+
+**姿勢判定が通らない問題**
+- 原因は腰のキーポイントを必須にしていたこと。椅子では画角から外れ、布団の上では体の前方にずれる
+- ラベル付きサンプルを25件収集して比較し、肩の傾きが起床0.01〜0.06 / 就寝0.59〜17.47と完全に分離することを確認
+- 直立判定を肩の傾きのみに一本化し、腰を不使用にした
+
+**二度寝監視が始まらない問題**
+- 監視開始には人物がフレームから消える必要があるが、その案内が日本語だったため`cv2.putText`が描画できず文字化けしていた。英字表記に修正
+- 手順を踏んだ結果、change_ratioは不在時0.00〜0.08 / 布団に戻ると0.31〜0.73となり、閾値0.15が妥当と確認できた
+- 以前「常時0.24〜0.97」と出ていたのは基準フレームが正しく撮れていなかったため
+
+**その他の修正**
+- STOPで停止した際に累積保持時間がリセットされず、次回のアラームに持ち越されるバグを修正
+- 待機ループを1秒→0.2秒に高速化したことで同じ分内にアラームが多重発火するため、1分1回に制限
+

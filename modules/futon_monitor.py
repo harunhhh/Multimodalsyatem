@@ -7,35 +7,75 @@ ROI内の変化ピクセル割合という面積ベースの近似指標とし�
 import cv2
 import numpy as np
 
+# cv2.putTextは日本語を描画できないため、画面上の案内は英字で表示する
+_ROI_WINDOW_NAME = "Select futon area"
 
-def set_roi(frame):
-    """起動時に手動でベッド領域を矩形選択する。
 
-    ドラッグしてEnter/SPACEで確定。確定後は選択範囲を表示し、
-    'y'で決定、それ以外のキー（'r'等）で選び直せる。
+def _rect_from_points(start, end):
+    """ドラッグの始点・終点から (x, y, w, h) を作る。範囲が無い場合はNone。"""
+    if start is None or end is None:
+        return None
+    x = min(start[0], end[0])
+    y = min(start[1], end[1])
+    w = abs(end[0] - start[0])
+    h = abs(end[1] - start[1])
+    if w == 0 or h == 0:
+        return None
+    return (int(x), int(y), int(w), int(h))
+
+
+def select_roi_live(cap):
+    """ライブ映像の上で直接ベッド領域をドラッグ選択する。
+
+    静止画を撮る手順は無く、映像を見ながらドラッグ → Enter で確定できる。
+    r で選び直し、q で中止（KeyboardInterrupt）。
 
     Returns:
         tuple[int, int, int, int]: (x, y, w, h)
     """
-    window_name = "ROIを選択してEnter"
-    while True:
-        x, y, w, h = cv2.selectROI(window_name, frame, showCrosshair=True)
-        if w == 0 or h == 0:
-            print("ROIが選択されていません。もう一度ドラッグして選択してください。")
-            continue
+    drag = {"start": None, "end": None, "active": False}
 
-        preview = frame.copy()
-        cv2.rectangle(preview, (x, y), (x + w, y + h), (0, 255, 0), 2)
-        cv2.putText(
-            preview, "y:決定  r/その他キー:選び直し",
-            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2,
-        )
-        cv2.imshow(window_name, preview)
-        key = cv2.waitKey(0) & 0xFF
-        if key == ord("y"):
-            cv2.destroyWindow(window_name)
-            return (int(x), int(y), int(w), int(h))
-        print("選び直します。")
+    def on_mouse(event, x, y, flags, param):
+        if event == cv2.EVENT_LBUTTONDOWN:
+            drag["start"] = (x, y)
+            drag["end"] = (x, y)
+            drag["active"] = True
+        elif event == cv2.EVENT_MOUSEMOVE and drag["active"]:
+            drag["end"] = (x, y)
+        elif event == cv2.EVENT_LBUTTONUP:
+            drag["end"] = (x, y)
+            drag["active"] = False
+
+    cv2.namedWindow(_ROI_WINDOW_NAME)
+    cv2.setMouseCallback(_ROI_WINDOW_NAME, on_mouse)
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                raise RuntimeError("ROI設定用のフレーム取得に失敗しました")
+
+            display = frame.copy()
+            roi = _rect_from_points(drag["start"], drag["end"])
+            if roi is not None:
+                x, y, w, h = roi
+                cv2.rectangle(display, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                guide = "Enter: confirm   r: redo   q: quit"
+            else:
+                guide = "Drag to select the futon area"
+            cv2.putText(display, guide, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.imshow(_ROI_WINDOW_NAME, display)
+
+            key = cv2.waitKey(30) & 0xFF
+            if key in (13, 10) and roi is not None:  # Enter
+                return roi
+            if key == ord("r"):
+                drag["start"] = drag["end"] = None
+                drag["active"] = False
+            elif key == ord("q"):
+                raise KeyboardInterrupt
+    finally:
+        cv2.destroyWindow(_ROI_WINDOW_NAME)
+        cv2.waitKey(1)  # Windowsではイベントを回さないとウィンドウが残る
 
 
 def _crop_gray(frame, roi):
